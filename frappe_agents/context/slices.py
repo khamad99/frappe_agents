@@ -380,7 +380,7 @@ def _version_entry(meta: Any, row: dict, doctype: str, name: str) -> dict:
 			if len(inner_change) < 3:
 				continue
 			field_change = _field_change(
-				child_meta, inner_change[0], inner_change[1], inner_change[2], source
+				child_meta, inner_change[0], inner_change[1], inner_change[2], source, parenttype=doctype
 			)
 			field_change["field"] = f"{table}[{cint(index)}].{field_change['field']}"
 			changes.append(field_change)
@@ -397,16 +397,35 @@ def _version_entry(meta: Any, row: dict, doctype: str, name: str) -> dict:
 	return entry
 
 
-def _field_change(meta: Any, fieldname: str, old: Any, new: Any, source: str) -> dict:
+def _field_change(
+	meta: Any, fieldname: str, old: Any, new: Any, source: str, parenttype: str | None = None
+) -> dict:
 	if fieldname == "docstatus":
 		return {"field": fieldname, "from": status_word(old), "to": status_word(new)}
 
 	df = meta.get_field(fieldname) if meta else None
+	withheld = _withheld(meta, df, parenttype)
+	if withheld:
+		# A version row holds the raw value from both sides of the edit. The focal-doc
+		# read check says nothing about this field, so it gets the same answer the
+		# field projection gives: restricted or masked, never the value.
+		return {"field": fieldname, "from": withheld, "to": withheld}
 	return {
 		"field": fieldname,
 		"from": _version_value(df, old, source, fieldname),
 		"to": _version_value(df, new, source, fieldname),
 	}
+
+
+def _withheld(meta: Any, df: Any, parenttype: str | None = None) -> str | None:
+	"""The placeholder for a field this user may not read, or reads only masked."""
+	if meta is None or df is None:
+		return None
+	if cint(df.permlevel) not in meta.get_permlevel_access("read", parenttype=parenttype):
+		return RESTRICTED
+	if df.fieldname in masked_fieldnames(meta):
+		return MASKED
+	return None
 
 
 def _version_value(df: Any, value: Any, source: str, fieldname: str) -> Any:
