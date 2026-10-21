@@ -18,6 +18,8 @@ from frappe_agents.tests.fixtures import (
 	DRAFT_USER,
 	IBAN_FIELD,
 	OPEN_USER,
+	ORDER_DT,
+	ORDER_LIVE,
 	RESTRICTED_USER,
 	TICKET_ALPHA,
 	TICKET_DT,
@@ -85,3 +87,22 @@ class TestTheVersionsSlice(AgentTestCase):
 		change = self.change_to(OPEN_USER, TICKET_DT, TICKET_ALPHA, "secret_note")
 
 		self.assertEqual((change["from"], change["to"]), ("old secret", "new secret"))
+
+	def test_a_child_table_above_the_users_permlevel_hides_its_rows(self):
+		"""The child fields sit at permlevel 0. The table that holds them does not."""
+		self.track(ORDER_DT)
+		frappe.db.set_value("DocField", {"parent": ORDER_DT, "fieldname": "items"}, "permlevel", 1)
+		frappe.clear_cache(doctype=ORDER_DT)
+		row = frappe.get_doc(ORDER_DT, ORDER_LIVE).items[0]
+		frappe.get_doc(
+			{
+				"doctype": "Version",
+				"ref_doctype": ORDER_DT,
+				"docname": ORDER_LIVE,
+				"data": json.dumps({"row_changed": [["items", 0, row.name, [["qty", 2, 5]]]]}),
+			}
+		).insert(ignore_permissions=True)
+
+		change = self.change_to(DRAFT_USER, ORDER_DT, ORDER_LIVE, "items[0].qty")
+
+		self.assertEqual((change["from"], change["to"]), (RESTRICTED, RESTRICTED))

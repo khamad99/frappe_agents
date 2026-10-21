@@ -375,13 +375,19 @@ def _version_entry(meta: Any, row: dict, doctype: str, name: str) -> dict:
 		if len(change) < 4:
 			continue
 		table, index, inner = change[0], change[1], change[3]
+		# A table above the user's permlevel hides every row in it, whatever the
+		# permlevel of the child fields themselves.
+		table_withheld = _withheld(meta, meta.get_field(table) if meta else None)
 		child_meta = _child_meta(meta, table)
 		for inner_change in inner or []:
 			if len(inner_change) < 3:
 				continue
-			field_change = _field_change(
-				child_meta, inner_change[0], inner_change[1], inner_change[2], source, parenttype=doctype
-			)
+			if table_withheld:
+				field_change = {"field": inner_change[0], "from": table_withheld, "to": table_withheld}
+			else:
+				field_change = _field_change(
+					child_meta, inner_change[0], inner_change[1], inner_change[2], source, parenttype=doctype
+				)
 			field_change["field"] = f"{table}[{cint(index)}].{field_change['field']}"
 			changes.append(field_change)
 
@@ -420,7 +426,8 @@ def _field_change(
 def _withheld(meta: Any, df: Any, parenttype: str | None = None) -> str | None:
 	"""The placeholder for a field this user may not read, or reads only masked."""
 	if meta is None or df is None:
-		return None
+		# A field the doctype no longer has has no permlevel to check against.
+		return RESTRICTED
 	if cint(df.permlevel) not in meta.get_permlevel_access("read", parenttype=parenttype):
 		return RESTRICTED
 	if df.fieldname in masked_fieldnames(meta):
