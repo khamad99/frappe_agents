@@ -187,6 +187,32 @@ class TestExtractionGate(AgentTestCase):
 
 		self.assertEqual(self.flags(doc)[IBAN_FIELD]["mismatch"], 1)
 
+	def test_a_master_field_above_the_readers_permlevel_is_compared_but_not_shown(self):
+		"""Not masked, but out of reach: the value stays out of the flags all the same."""
+		self.change_iban_field(mask=0, permlevel=1)
+
+		doc, _ = self.extract(**{IBAN_FIELD: VENDOR_IBAN})
+
+		flag = self.flags(doc)[IBAN_FIELD]
+		self.assertEqual(flag["mismatch"], 0)
+		self.assertEqual(flag["master_visible"], 0)
+		self.assertIsNone(flag["master_value"])
+
+	def change_iban_field(self, **values) -> None:
+		"""Change the vendor's IBAN field for this test only.
+
+		Meta and the per-user masked-field list are cached, so both are dropped again
+		after the rollback, or the change would outlive this test.
+		"""
+		frappe.db.set_value("DocField", {"parent": VENDOR_DT, "fieldname": IBAN_FIELD}, values)
+		self.forget_vendor_meta()
+		self.addCleanup(self.forget_vendor_meta)
+		self.addCleanup(frappe.db.rollback)
+
+	def forget_vendor_meta(self) -> None:
+		frappe.clear_cache(doctype=VENDOR_DT)
+		frappe.cache.delete_keys("masked_fields::")
+
 	def test_an_unresolved_vendor_leaves_the_value_flagged_with_nothing_to_compare(self):
 		"""No master is "cannot tell", never "fine"."""
 		doc, _ = self.extract(vendor="FA Nobody Ltd", **{IBAN_FIELD: ALTERED_IBAN})

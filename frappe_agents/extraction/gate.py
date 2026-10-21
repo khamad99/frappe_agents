@@ -167,7 +167,7 @@ def _master(target_doctype: str | None, fieldname: str, links: dict) -> tuple | 
 		if not frappe.has_permission(df.options, "read", doc=name):
 			continue
 		value = _stored_value(df.options, name, fieldname)
-		return df.options, name, value, fieldname not in _masked_fields(master_meta)
+		return df.options, name, value, _may_see(master_meta, fieldname)
 
 	return None
 
@@ -184,6 +184,14 @@ def _stored_value(doctype: str, name: str, fieldname: str) -> Any:
 	# read-gated: the caller checked read permission on this record. See AGENTS.md.
 	rows = frappe.qb.from_(table).select(table[fieldname]).where(table.name == name).run()
 	return rows[0][0] if rows else None
+
+
+def _may_see(meta: Any, fieldname: str) -> bool:
+	"""Whether this user may see the field's value: its permlevel, and not masked."""
+	level = cint(meta.get_field(fieldname).permlevel)
+	if level not in meta.get_permlevel_access("read"):
+		return False
+	return fieldname not in _masked_fields(meta)
 
 
 def _masked_fields(meta: Any) -> set[str]:
