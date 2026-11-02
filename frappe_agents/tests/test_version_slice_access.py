@@ -80,6 +80,14 @@ class TestTheVersionsSlice(AgentTestCase):
 
 		self.assertEqual((change["from"], change["to"]), (RESTRICTED, RESTRICTED))
 
+	def test_a_field_the_doctype_no_longer_has_comes_back_restricted(self):
+		"""An old Version row can name a field that was deleted since. It has no permlevel left."""
+		self.record_edit(TICKET_DT, TICKET_ALPHA, "dropped_field", "old value", "new value")
+
+		change = self.change_to(OPEN_USER, TICKET_DT, TICKET_ALPHA, "dropped_field")
+
+		self.assertEqual((change["from"], change["to"]), (RESTRICTED, RESTRICTED))
+
 	def test_a_user_who_may_read_the_field_sees_the_change(self):
 		"""The control. Without it, a slice that withheld everything would pass the two above."""
 		self.record_edit(TICKET_DT, TICKET_ALPHA, "secret_note", "old secret", "new secret")
