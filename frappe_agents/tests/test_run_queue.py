@@ -19,6 +19,7 @@ from frappe_agents.runner.queue import (
 	FALLBACK_QUEUE,
 	SETTINGS,
 	configured_queue,
+	fail_abandoned_runs,
 	fail_unstarted_runs,
 	has_worker,
 	queue_warning,
@@ -234,6 +235,57 @@ class TestRunsNoWorkerStarted(QueueCase):
 		hourly = frappe.get_hooks("scheduler_events", app_name="frappe_agents").get("hourly", [])
 
 		self.assertIn("frappe_agents.runner.queue.fail_unstarted_runs", hourly)
+
+	def test_a_short_timeout_is_not_rounded_down_to_zero_minutes(self):
+		self.use_setting("run_timeout", 20)
+		stuck = self.queued_run(minutes_ago=5)
+
+		fail_unstarted_runs()
+
+		self.assertIn("within 40 seconds", frappe.db.get_value("Agent Run", stuck, "error"))
+
+
+class TestRunsWhoseWorkerDied(QueueCase):
+	def setUp(self) -> None:
+		super().setUp()
+		self.use_setting("run_timeout", DEFAULT_RUN_TIMEOUT)
+
+	def running_run(self, started_minutes_ago: int, status: str = "Running") -> str:
+		run = make_run(RESTRICTED_USER)
+		started = add_to_date(now_datetime(), minutes=-started_minutes_ago)
+		frappe.db.set_value(
+			"Agent Run", run.name, {"status": status, "started_at": started}, update_modified=False
+		)
+		return run.name
+
+	def test_a_run_still_running_past_twice_the_timeout_is_failed(self):
+		abandoned = self.running_run(started_minutes_ago=60)
+
+		self.assertGreaterEqual(fail_abandoned_runs(), 1)
+
+		status, error, ended = frappe.db.get_value("Agent Run", abandoned, ["status", "error", "ended_at"])
+		self.assertEqual(status, "Failed")
+		self.assertIn("its worker stopped", error)
+		self.assertIsNotNone(ended)
+
+	def test_a_run_inside_the_window_is_left_alone(self):
+		working = self.running_run(started_minutes_ago=5)
+
+		fail_abandoned_runs()
+
+		self.assertEqual(frappe.db.get_value("Agent Run", working, "status"), "Running")
+
+	def test_a_finished_run_is_left_alone(self):
+		finished = self.running_run(started_minutes_ago=60, status="Completed")
+
+		fail_abandoned_runs()
+
+		self.assertEqual(frappe.db.get_value("Agent Run", finished, "status"), "Completed")
+
+	def test_the_sweep_runs_every_hour(self):
+		hourly = frappe.get_hooks("scheduler_events", app_name="frappe_agents").get("hourly", [])
+
+		self.assertIn("frappe_agents.runner.queue.fail_abandoned_runs", hourly)
 
 
 class TestTheDefaultsOnAnUpgradedSite(QueueCase):

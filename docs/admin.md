@@ -105,14 +105,17 @@ set **Run Queue** to `long`.
 
 ## Scheduled work
 
-Two jobs:
+Three jobs:
 
 - **Expire stale actions**, daily. It moves proposals nobody decided to Expired
   after the number of days in Agent Settings.
 - **Fail unstarted runs**, hourly. A run that no worker started within twice the
   Run Timeout is marked failed, with a reason the chat shows.
+- **Fail abandoned runs**, hourly. A run that is still running twice the Run
+  Timeout after it started is marked failed, with a reason the chat shows. Its
+  worker stopped before the run could finish.
 
-Both jobs are safe to run by hand and safe to run twice.
+All three jobs are safe to run by hand and safe to run twice.
 
 Expiry is the clock, not a decision. Nobody is recorded as having decided, and
 the agent may propose the same thing again.

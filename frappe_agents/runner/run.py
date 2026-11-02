@@ -1261,8 +1261,8 @@ def _update(run: Any, values: dict) -> None:
 	run.db_set(values, update_modified=False)
 
 
-def fail_unstarted_run(run_name: str, message: str) -> None:
-	"""Fail a run that no worker started in time. The hourly sweep calls this."""
+def fail_stuck_run(run_name: str, message: str) -> None:
+	"""Fail a run no worker will finish: never started, or abandoned. The hourly sweeps call this."""
 	run = frappe.get_doc("Agent Run", run_name)
 	run.flags.ignore_permissions = True
 	_fail(run, message)
