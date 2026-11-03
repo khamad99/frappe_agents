@@ -1,6 +1,6 @@
 # Built-in tools
 
-Sixteen tools ship with the app. You do not grant them one by one. You write
+Seventeen tools ship with the app. You do not grant them one by one. You write
 access rules, and the rules decide which tools an agent is offered — see
 [What an agent may reach](access.md).
 
@@ -14,7 +14,7 @@ it may call at all.
 
 | Class | Ships | Means |
 |---|---|---|
-| **Read** | 10 tools | Looks at data. Changes nothing. |
+| **Read** | 11 tools | Looks at data. Changes nothing. |
 | **Draft** | 6 tools | Writes a draft, or writes a proposal. Commits nothing. |
 | **Write** | none | Reserved for tools another app registers. |
 | **Submit** | none, ever | No tool may hold it. Agents do not submit. |
@@ -37,6 +37,7 @@ Every refusal is audited.
 |---|---|
 | `find_doctypes` | Lists the doctypes this agent may work with and what it may do with each. Usually its first call. |
 | `search_documents` | Lists documents of one doctype. Returns only rows and fields the running user may read. |
+| `aggregate_documents` | Counts, sums, averages, minimums and maximums over one doctype, grouped or not. Needs the running user's **Report** permission on the doctype. |
 | `get_doctype_meta` | Describes a doctype's fields, so the model can build a correct search or draft. |
 | `run_report` | Runs a saved Frappe report as the running user and returns its columns and rows, capped. |
 | `read_document` | Reads an attached file and reports what it says. Needs **May Read Files**. |
@@ -52,6 +53,30 @@ ordinary agent.
 `get_document_context` before `get_document_slice` is the deliberate shape: the
 model is told what exists as counts, then asks for one slice, instead of being
 handed a document dump it did not need.
+
+### Totals and grouping
+
+`aggregate_documents` answers "how many" and "how much". The database adds the
+numbers up, so the total is right however many documents match. A sum the model
+makes from a page of `search_documents` rows is wrong when there are more rows
+than the page.
+
+- It groups by up to two fields. A date groups by `day`, `month`, `quarter` or
+  `year`, written `posting_date:month`.
+- It counts only documents the running user may read. User Permissions apply.
+- On a doctype that has a per-row permission check from an app, it checks each
+  document before it counts it. It checks up to 5,000 documents. When more
+  match, it refuses and asks for narrower filters. It never gives a total over
+  part of the data.
+- It refuses a field the running user may not read, or sees masked, in a total,
+  a group or a filter. A total cannot show `<restricted>` the way a list can.
+- It leaves cancelled documents out unless the call asks for them.
+- When money is in more than one currency, it splits the total by currency. It
+  does not convert currencies.
+
+The access rule's **Max Rows per Call** limits the number of groups it returns.
+The audit row names the doctype and the number of documents counted, not the
+documents.
 
 ## Draft
 

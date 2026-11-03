@@ -11,7 +11,8 @@ named in Agent Settings, and a bench gives that queue its own worker.
 A queue with no worker is worse than a busy one: the job waits for ever and the
 chat shows "Queued…" with nothing to explain it. So when nothing listens on the
 configured queue, the job goes to `long` instead, Agent Settings says so, and a
-run that no worker ever started is failed with a reason.
+run that no worker ever started is failed with a reason. So is a run whose worker
+died under it, which would otherwise read "Running" for ever.
 """
 
 import frappe
@@ -51,19 +52,47 @@ def fail_unstarted_runs() -> int:
 
 	Selects only Queued rows, so a run a worker picked up meanwhile is left alone.
 	"""
-	from frappe_agents.runner.run import fail_unstarted_run
+	from frappe_agents.runner.run import fail_stuck_run
 
 	window = 2 * run_timeout()
 	cutoff = add_to_date(now_datetime(), seconds=-window)
 	# Scheduler code, not tool code: it runs as nobody and decides nothing for a user.
 	stuck = frappe.get_all("Agent Run", filters={"status": "Queued", "creation": ("<", cutoff)}, pluck="name")
 	message = (
-		f"No worker started this run within {window // 60} minutes. The agent queue has no "
+		f"No worker started this run within {_duration(window)}. The agent queue has no "
 		"worker, or its workers were busy. Send the message again."
 	)
 	for name in stuck:
-		fail_unstarted_run(name, message)
+		fail_stuck_run(name, message)
 	return len(stuck)
+
+
+def fail_abandoned_runs() -> int:
+	"""Fail runs still Running twice the run timeout after they started. Hourly job.
+
+	RQ stops a job at the run timeout, so past twice that nothing is working on the
+	run any more: its worker died, or was killed, before the run could say so.
+	"""
+	from frappe_agents.runner.run import fail_stuck_run
+
+	window = 2 * run_timeout()
+	cutoff = add_to_date(now_datetime(), seconds=-window)
+	# Scheduler code, not tool code: it runs as nobody and decides nothing for a user.
+	abandoned = frappe.get_all(
+		"Agent Run", filters={"status": "Running", "started_at": ("<", cutoff)}, pluck="name"
+	)
+	message = (
+		f"This run stopped without an answer: it was still running {_duration(window)} after it "
+		"started, so its worker stopped under it. Send the message again."
+	)
+	for name in abandoned:
+		fail_stuck_run(name, message)
+	return len(abandoned)
+
+
+def _duration(seconds: int) -> str:
+	"""Whole minutes, unless that would round a short window down to nothing."""
+	return f"{seconds // 60} minutes" if seconds >= 120 else f"{seconds} seconds"
 
 
 def configured_queue() -> str:
