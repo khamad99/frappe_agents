@@ -315,6 +315,13 @@ const STYLES = `
 	.agent-chat-action.is-extraction.is-review { border-inline-start-color: var(--orange-500, var(--border-color)); }
 	.agent-chat-action.is-extraction.is-failed { border-inline-start-color: var(--red-500, var(--border-color)); }
 	.agent-chat-action-line { font-size: var(--text-sm); margin-top: 2px; }
+	.agent-chat-chart { border: 1px solid var(--border-color); border-radius: var(--border-radius-sm, 8px); padding: 8px 12px; margin: 4px 0 10px; background: var(--card-bg, var(--control-bg)); max-width: 100%; overflow: hidden; }
+	.agent-chat-chart-title { font-weight: 600; }
+	.agent-chat-chart-note { font-size: var(--text-sm); color: var(--text-muted); }
+	.agent-chat-chart-data summary { font-size: var(--text-sm); color: var(--text-muted); cursor: pointer; }
+	.agent-chat-chart-data table { font-size: var(--text-sm); margin-top: 4px; border-collapse: collapse; }
+	.agent-chat-chart-data th, .agent-chat-chart-data td { padding: 2px 8px; border-bottom: 1px solid var(--border-color); text-align: start; }
+	.agent-chat-chart-data td.is-number { text-align: end; font-variant-numeric: tabular-nums; }
 	.agent-chat-action-line.is-alarm { color: var(--text-on-red, var(--text-color)); background: var(--bg-red, var(--control-bg)); border-radius: 6px; padding: 4px 6px; margin-top: 4px; }
 `;
 
@@ -329,6 +336,10 @@ frappe_agents.EXTRACTION_UPDATE_EVENT = "frappe_agents:extraction_update";
 // Tools whose result is a proposal waiting for a person. Their finished event is
 // what a reopened conversation redraws its approval cards from.
 const PROPOSAL_TOOLS = ["propose_submit", "propose_cancel"];
+// The one tool whose result may carry a chart. The server builds it from the
+// totals it counted; nothing the model writes in its answer becomes a chart.
+const CHART_TOOL = "aggregate_documents";
+const CHART_HEIGHT = 240;
 
 // How much of a conversation is kept in memory, and how many conversations.
 // Oldest events go first: a run that is still going will write its own log the
@@ -499,6 +510,41 @@ function proposal_from_event(event) {
 	return result && result.action ? result : null;
 }
 
+/** The chart a finished aggregate call carries, or null if it has none. */
+function chart_from_event(event) {
+	if (event.toolName !== CHART_TOOL || event.isError) return null;
+	let payload = null;
+	try {
+		payload = JSON.parse(result_text(event.result));
+	} catch (e) {
+		return null;
+	}
+	const chart = payload && payload.ok && payload.result ? payload.result.chart : null;
+	return chart && Array.isArray(chart.labels) && Array.isArray(chart.datasets) ? chart : null;
+}
+
+/** The chart's values as a table, behind a disclosure. Written as text, never HTML. */
+function chart_table(chart) {
+	const $details = $("<details class='agent-chat-chart-data'></details>");
+	$("<summary></summary>").text(__("Show the numbers")).appendTo($details);
+	const $table = $("<table></table>").appendTo($details);
+	const $head = $("<tr></tr>").appendTo($("<thead></thead>").appendTo($table));
+	$("<th></th>").appendTo($head);
+	chart.datasets.forEach((set) => $("<th></th>").text(set.name).appendTo($head));
+	const $body = $("<tbody></tbody>").appendTo($table);
+	chart.labels.forEach((label, index) => {
+		const $row = $("<tr></tr>").appendTo($body);
+		$("<th scope='row'></th>").text(label).appendTo($row);
+		chart.datasets.forEach((set) => {
+			const value = (set.values || [])[index];
+			$("<td class='is-number'></td>")
+				.text(typeof value === "number" ? value.toLocaleString() : "")
+				.appendTo($row);
+		});
+	});
+	return $details;
+}
+
 /**
  * What the server said went wrong, in its own words.
  *
@@ -637,6 +683,8 @@ frappe_agents.ChatUI = class ChatUI {
 		this.extractions = {};
 		// One card per proposal, so replaying a log cannot draw a second one.
 		this.actions = {};
+		// One card per chart, keyed by run and tool call id, for the same reason.
+		this.charts = {};
 		// Tool lines drawn when the tool started, keyed by run and tool call id,
 		// plus the queue the finished event finds them by.
 		this.tool_lines = {};
@@ -1684,6 +1732,7 @@ frappe_agents.ChatUI = class ChatUI {
 
 			this.finish_tool_line(this.tool_lines[tool_line_key(run, event.toolCallId)]);
 			this.record_tool_result(run, event);
+			this.render_chart(run, event);
 
 			const proposal = proposal_from_event(event);
 			if (!proposal) return;
@@ -2048,6 +2097,7 @@ frappe_agents.ChatUI = class ChatUI {
 			// Not always: a tool the kill switch refused publishes no legacy event.
 			this.finish_tool_line(this.tool_lines[tool_line_key(data.run, event.toolCallId)]);
 			this.record_tool_result(data.run, event);
+			this.render_chart(data.run, event);
 		} else if (event.type === "message_end") {
 			this.finish_stream_message(data.run, event.message);
 		} else if (event.type === "run_failed") {
@@ -2356,6 +2406,59 @@ frappe_agents.ChatUI = class ChatUI {
 
 		this.insert_before_pending(data.run, $card);
 		this.actions[data.action] = $card;
+	}
+
+	/**
+	 * A chart card for an aggregate call that asked for one.
+	 *
+	 * A label is whatever somebody typed into a customer or a project name, and
+	 * Frappe Charts puts it in two kinds of place: the axis and the legend take
+	 * it as text, the hover tooltip writes it as HTML. Escaping would be right
+	 * for the tooltip and print `&lt;` on the axis. So the angle brackets are
+	 * swapped for look-alikes instead: with no `<`, no tag can open in either
+	 * place, and the label still reads. The numbers under the chart are the same
+	 * values as a table, for a screen reader and for copying, written as text
+	 * with the label as it was.
+	 */
+	render_chart(run, event) {
+		const chart = chart_from_event(event);
+		const key = tool_line_key(run, event.toolCallId);
+		if (!chart || this.charts[key]) return;
+		if (typeof frappe === "undefined" || !frappe.Chart) return;
+		this.clear_empty();
+
+		const plain = (text) =>
+			String(text == null ? "" : text)
+				.replace(/</g, "\u2039")
+				.replace(/>/g, "\u203A");
+		const $card = $("<figure class='agent-chat-chart'></figure>");
+		if (chart.title) {
+			$("<figcaption class='agent-chat-chart-title'></figcaption>").text(chart.title).appendTo($card);
+		}
+		const $plot = $("<div role='img'></div>")
+			.attr("aria-label", chart.title || __("Chart"))
+			.appendTo($card);
+		if (chart.note) $("<div class='agent-chat-chart-note'></div>").text(chart.note).appendTo($card);
+		$card.append(chart_table(chart));
+
+		this.insert_before_pending(run, $card);
+		this.charts[key] = $card;
+		try {
+			// Drawn once the card is in the page, so the chart can measure its width.
+			new frappe.Chart($plot[0], {
+				type: chart.type,
+				height: CHART_HEIGHT,
+				data: {
+					labels: chart.labels.map(plain),
+					datasets: chart.datasets.map((set) => ({ name: plain(set.name), values: set.values })),
+				},
+				truncateLegends: true,
+				axisOptions: { xIsSeries: chart.type === "line" },
+			});
+		} catch (e) {
+			// The table under it still says everything the chart would have.
+			$plot.remove();
+		}
 	}
 
 	/**
