@@ -15,6 +15,7 @@ one, which is the Report View gate.
 """
 
 from contextlib import contextmanager
+from unittest import TestCase
 from unittest.mock import patch
 
 import frappe
@@ -38,11 +39,13 @@ from frappe_agents.tests.fixtures import (
 	tool_calls_for,
 )
 from frappe_agents.tools import aggregate_tools
+from frappe_agents.tools.charts import NONE_LABEL, build_chart
 
 PAYMENT_DT = "FA Test Payment"
 LISTER_ROLE = "FA Test Lister"
 LISTER_USER = "fa-lister@example.com"
 HIDDEN_PARTY = "FA Hidden Party"
+SUM_METRIC = {"alias": "sum_amount", "label": "Sum of Amount", "numeric": True}
 
 # title, project, date, currency, amount, base_amount, party
 PAYMENTS = (
@@ -280,6 +283,127 @@ class TestBadInput(AggregateTestCase):
 
 	def test_order_by_must_name_a_column(self):
 		self.assertIn("order_by", self.refused(OPEN_USER, {"order_by": "amount desc"}))
+
+
+class TestCharts(AggregateTestCase):
+	def chart(self, args: dict) -> dict:
+		return self.result(OPEN_USER, args)
+
+	def test_no_chart_unless_asked(self):
+		self.assertIsNone(self.chart({"group_by": ["project"]})["chart"])
+
+	def test_one_grouping_is_one_series_per_metric(self):
+		result = self.chart(
+			{
+				"group_by": ["posting_date:month"],
+				"metrics": [{"fn": "sum", "field": "base_amount"}, {"fn": "count"}],
+				"chart": {"type": "line", "title": "Payments by month"},
+			}
+		)
+
+		chart = result["chart"]
+		self.assertEqual(chart["type"], "line")
+		self.assertEqual(chart["title"], "Payments by month")
+		self.assertEqual(chart["labels"], ["2026-01", "2026-02", "2026-04"])
+		self.assertEqual(
+			chart["datasets"],
+			[
+				{"name": "Sum of Base Amount", "values": [100, 397, 1000]},
+				{"name": "Count", "values": [1, 2, 1]},
+			],
+		)
+
+	def test_two_groupings_are_one_series_per_value_of_the_second(self):
+		result = self.chart(
+			{
+				"group_by": ["posting_date:quarter", "project"],
+				"order_by": "posting_date:quarter asc",
+				"chart": {"type": "bar"},
+			}
+		)
+
+		chart = result["chart"]
+		self.assertEqual(chart["labels"], ["2026-Q1", "2026-Q2"])
+		series = {dataset["name"]: dataset["values"] for dataset in chart["datasets"]}
+		self.assertEqual(series, {PROJECT_ALPHA: [3, 0], PROJECT_BETA: [0, 1]})
+
+	def test_a_currency_split_becomes_the_series(self):
+		result = self.chart(
+			{"group_by": ["project"], "metrics": [{"fn": "sum", "field": "amount"}], "chart": {"type": "bar"}}
+		)
+
+		series = {dataset["name"]: dataset["values"] for dataset in result["chart"]["datasets"]}
+		self.assertEqual(set(series), {"AED", "USD"})
+
+	def test_a_chart_that_cannot_be_drawn_leaves_the_totals_and_says_why(self):
+		result = self.chart(
+			{
+				"group_by": ["project"],
+				"metrics": [{"fn": "sum", "field": "base_amount"}, {"fn": "count"}],
+				"chart": {"type": "pie"},
+			}
+		)
+
+		self.assertIsNone(result["chart"])
+		self.assertEqual(len(result["groups"]), 2)
+		self.assertTrue(any("one metric only" in note for note in result["notes"]))
+
+	def test_a_chart_needs_group_by(self):
+		result = self.chart({"chart": {"type": "bar"}})
+
+		self.assertIsNone(result["chart"])
+		self.assertTrue(any("needs group_by" in note for note in result["notes"]))
+
+	def test_a_chart_shows_only_the_groups_returned_and_says_so(self):
+		result = self.chart({"group_by": ["posting_date:month"], "limit": 2, "chart": {"type": "bar"}})
+
+		self.assertEqual(result["chart"]["labels"], ["2026-01", "2026-02"])
+		self.assertEqual(result["chart"]["note"], "The chart shows the first 2 of 3 groups.")
+
+	def test_a_bad_type_or_a_long_title_is_refused(self):
+		self.assertIn(
+			"chart type", self.refused(OPEN_USER, {"group_by": ["project"], "chart": {"type": "radar"}})
+		)
+		self.assertIn(
+			"at most",
+			self.refused(OPEN_USER, {"group_by": ["project"], "chart": {"type": "bar", "title": "x" * 81}}),
+		)
+
+
+class TestChartShapes(TestCase):
+	"""The builder alone, for the shapes the fixture data cannot make. No database."""
+
+	def test_a_pie_refuses_values_below_zero(self):
+		rows = [{"party": "A", "sum_amount": 5}, {"party": "B", "sum_amount": -2}]
+
+		chart, reason = build_chart({"type": "pie", "title": ""}, rows, ["party"], [SUM_METRIC])
+
+		self.assertIsNone(chart)
+		self.assertIn("below zero", reason)
+
+	def test_too_many_series_is_refused(self):
+		rows = [{"month": "2026-01", "party": f"P{index}", "sum_amount": index} for index in range(7)]
+
+		chart, reason = build_chart({"type": "bar", "title": ""}, rows, ["month", "party"], [SUM_METRIC])
+
+		self.assertIsNone(chart)
+		self.assertIn("more than 6", reason)
+
+	def test_an_empty_group_value_has_a_label(self):
+		rows = [{"party": None, "sum_amount": 5}, {"party": "", "sum_amount": 1}]
+
+		chart, _ = build_chart({"type": "bar", "title": ""}, rows, ["party"], [SUM_METRIC])
+
+		self.assertEqual(chart["labels"], [NONE_LABEL, NONE_LABEL])
+
+	def test_a_date_metric_is_not_drawn(self):
+		date_metric = {"alias": "max_posting_date", "label": "Maximum of Posting Date", "numeric": False}
+		rows = [{"party": "A", "max_posting_date": "2026-01-01"}]
+
+		chart, reason = build_chart({"type": "bar", "title": ""}, rows, ["party"], [date_metric])
+
+		self.assertIsNone(chart)
+		self.assertIn("none of the metrics is a number", reason)
 
 
 def _ensure_payments() -> None:

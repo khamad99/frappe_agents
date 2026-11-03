@@ -35,6 +35,7 @@ from frappe_agents.context.slices import (
 	status_word,
 )
 from frappe_agents.tools.base import CAPABILITY_READ, ToolDenied, row_cap
+from frappe_agents.tools.charts import CHART_TYPES, MAX_TITLE, build_chart, resolve_chart
 from frappe_agents.tools.read_tools import (
 	DEFAULT_LIMIT,
 	_as_bool,
@@ -71,6 +72,15 @@ STANDARD_TYPES = {
 
 COUNT_ALIAS = "_rows"
 
+# How a metric is named on a chart: "Sum of Paid Amount", not "sum_paid_amount".
+METRIC_WORDS = {
+	"count": "Count of",
+	"sum": "Sum of",
+	"avg": "Average of",
+	"min": "Minimum of",
+	"max": "Maximum of",
+}
+
 
 def aggregate_documents(payload: dict) -> dict:
 	"""Count, sum, average, minimum or maximum over one doctype, grouped or not."""
@@ -91,6 +101,7 @@ def aggregate_documents(payload: dict) -> dict:
 		fields.require_unmasked(fieldname, "filter")
 	limit = _resolve_limit(payload.get("limit"), row_cap(doctype, MAX_GROUPS))
 	include_cancelled = _as_bool(payload.get("include_cancelled"))
+	chart_spec = resolve_chart(payload.get("chart"))
 
 	if cint(meta.is_submittable) and not include_cancelled and "docstatus" not in filters:
 		filters = dict(filters, docstatus=("!=", 2))
@@ -112,6 +123,7 @@ def aggregate_documents(payload: dict) -> dict:
 	rows = [_group_row(key, bucket, groups, split, metrics) for key, bucket in totals.items()]
 	rows = _order(rows, payload.get("order_by"), groups, split, metrics)
 	rows_counted = sum(bucket.rows for bucket in overall.values())
+	chart = _chart(chart_spec, rows, limit, [group["key"] for group in groups] + split, metrics, notes)
 
 	return {
 		"doctype": doctype,
@@ -127,6 +139,7 @@ def aggregate_documents(payload: dict) -> dict:
 		"checked_row_by_row": checked_row_by_row,
 		"filtered_by_permission": filtered,
 		"notes": notes,
+		"chart": chart,
 		# An aggregate shows no one document, so the audit row names none.
 		"_docs_touched": f"{doctype}: aggregate of {rows_counted} row(s)",
 		"_result_summary": f"{min(len(rows), limit)} group(s) over {rows_counted} row(s)",
@@ -184,11 +197,18 @@ def _resolve_metrics(requested: Any, fields: _FieldCheck) -> list[dict]:
 		if fn not in FUNCTIONS:
 			raise ValueError(f"Metric fn must be one of {', '.join(FUNCTIONS)}.")
 		field = raw.get("field")
-		metric = {"fn": fn, "field": None, "fieldtype": None, "alias": fn}
+		metric = {"fn": fn, "field": None, "fieldtype": None, "alias": fn, "label": "Count"}
 		if fn != "count" or field:
 			fieldtype = fields.fieldtype(field, fn)
 			_require_type(fn, field, fieldtype)
-			metric.update(field=field.strip(), fieldtype=fieldtype, alias=f"{fn}_{field.strip()}")
+			field = field.strip()
+			metric.update(
+				field=field,
+				fieldtype=fieldtype,
+				alias=f"{fn}_{field}",
+				label=f"{METRIC_WORDS[fn]} {fields.meta.get_label(field)}",
+			)
+		metric["numeric"] = fn in ("count", "sum", "avg") or metric["fieldtype"] in NUMERIC_TYPES
 		if metric["alias"] not in {seen["alias"] for seen in metrics}:
 			metrics.append(metric)
 	return metrics
@@ -408,6 +428,21 @@ def _group_value(value: Any, group: dict) -> Any:
 	return str(day.year)
 
 
+def _chart(
+	spec: dict | None, rows: list[dict], limit: int, keys: list[str], metrics: list[dict], notes: list[str]
+) -> dict | None:
+	"""The chart asked for, drawn from the groups returned. A reason in notes when it cannot be."""
+	if not spec:
+		return None
+	chart, reason = build_chart(spec, rows[:limit], keys, metrics)
+	if not chart:
+		notes.append(reason)
+		return None
+	if len(rows) > limit:
+		chart["note"] = f"The chart shows the first {limit} of {len(rows)} groups."
+	return chart
+
+
 def _group_row(
 	key: tuple, bucket: _Bucket, groups: list[dict], split: list[str], metrics: list[dict]
 ) -> dict:
@@ -465,7 +500,9 @@ TOOLS = [
 			"(day, month, quarter, year). Only rows the user may read are counted. Fields the user "
 			"may not read, or sees masked, are refused. Cancelled documents are left out unless you "
 			"pass include_cancelled. Money in more than one currency comes back split by currency; "
-			"read 'notes'. 'overall' is the total across every group, not only the ones returned."
+			"read 'notes'. 'overall' is the total across every group, not only the ones returned. "
+			"Pass 'chart' to show the groups as a chart under your answer; the chart is drawn from "
+			"these totals, so do not repeat every number of it in your text."
 		),
 		"args_schema": {
 			"type": "object",
@@ -514,6 +551,21 @@ TOOLS = [
 				"include_cancelled": {
 					"type": "boolean",
 					"description": "Include cancelled documents. Default false.",
+				},
+				"chart": {
+					"type": "object",
+					"properties": {
+						"type": {"type": "string", "enum": list(CHART_TYPES)},
+						"title": {
+							"type": "string",
+							"description": f"Plain text, at most {MAX_TITLE} characters.",
+						},
+					},
+					"required": ["type"],
+					"description": (
+						"Show the groups as a chart. Needs group_by. 'line' suits a date period, 'bar' a "
+						"comparison, 'pie' or 'donut' the parts of one total (one grouping, one metric)."
+					),
 				},
 			},
 			"required": ["doctype"],
