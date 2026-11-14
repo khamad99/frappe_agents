@@ -64,6 +64,22 @@ open and running while it thinks, then folded into one line — **Thought for 4s
 — the moment it stops. Click the line to read it. The thinking is not the
 answer, and it is never what the conversation is stored with.
 
+## Charts
+
+Ask for totals as a chart — "payments by month as a line chart" — and a chart
+appears in the conversation, above the answer. The agent does not draw it. The
+agent asks for totals, and the chart is drawn from the totals the database
+counted. So every number in a chart is a number you could count yourself.
+
+- A chart is a bar, line, pie or donut chart.
+- **Show the numbers**, under the chart, opens the same values as a table.
+- A chart that shows only the first groups says so under it.
+- When the agent asks for a chart that cannot show the totals — for example a
+  pie chart of two different totals — there is no chart. The totals are still
+  in the answer.
+
+The chart comes back when you open the conversation again.
+
 ## When something does not go through
 
 A message that could not be sent says so in the log, in the server's own words,

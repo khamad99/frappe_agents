@@ -74,6 +74,10 @@ than the page.
 - When money is in more than one currency, it splits the total by currency. It
   does not convert currencies.
 
+- With `chart`, it also returns a bar, line, pie or donut chart of the groups.
+  The chart is built from the totals, never from numbers the model writes. See
+  [Charts](chat.md#charts).
+
 The access rule's **Max Rows per Call** limits the number of groups it returns.
 The audit row names the doctype and the number of documents counted, not the
 documents.
