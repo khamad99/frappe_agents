@@ -58,8 +58,11 @@ drawn at the largest size the model reads (about 200 dpi on an A4 page). Sent
 whole, Anthropic draws the pages smaller, and small print on a scan is misread.
 Drawing a page does not change it: nothing is cropped or cleaned, and the File
 keeps the PDF as it was uploaded. The pages are drawn with pypdfium2, which
-ERPNext installs. Without it, and for a scan of more than 20 pages, the PDF goes
-whole. A PDF with text in it always goes whole.
+ERPNext installs. The PDF goes whole, the way it did before, in three cases:
+pypdfium2 is not installed, the scan has more than 20 pages, or the page images
+are too large to send. One page may be 10 MiB and all pages together 32 MiB,
+both counted in base64. A long scan of poor quality, about seven noisy A4 pages
+or more, can pass the second limit. A PDF with text in it always goes whole.
 
 The model profile must honestly declare **Supports PDF** or **Supports Images**.
 A profile claiming support it does not have fails here.

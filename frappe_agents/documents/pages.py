@@ -14,6 +14,7 @@ pypdfium2 is not a Frappe dependency. ERPNext brings it (through pdfplumber), so
 it is on most sites; where it is missing, the PDF goes whole, as it always did.
 """
 
+import base64
 import math
 from io import BytesIO
 
@@ -37,19 +38,32 @@ PATCH_PIXELS = 28
 MAX_PAGE_IMAGES = 20
 
 
-def scanned_pages(content: bytes) -> list[bytes] | None:
-	"""Each page of a scan as PNG bytes, or None when the PDF should go whole."""
+def scanned_pages(content: bytes, max_page_encoded: int, max_total_encoded: int) -> list[str] | None:
+	"""Each page of a scan as base64 PNG, or None when the PDF should go whole.
+
+	The cheap answers come first: no renderer, too many pages, a text layer. The
+	limits are the provider's, on the base64 text. Drawing stops at the first page
+	that breaks one, because a scan that will go whole need not be drawn to the end.
+	"""
 	pdfium = _renderer()
-	if pdfium is None or has_text_layer(content):
+	if pdfium is None:
 		return None
 	try:
 		document = pdfium.PdfDocument(content)
 	except Exception:
 		return None
 	try:
-		if not 0 < len(document) <= MAX_PAGE_IMAGES:
+		if not 0 < len(document) <= MAX_PAGE_IMAGES or has_text_layer(content):
 			return None
-		return [_png(document[index]) for index in range(len(document))]
+		images: list[str] = []
+		total = 0
+		for index in range(len(document)):
+			image = base64.b64encode(_png(document[index])).decode("ascii")
+			total += len(image)
+			if len(image) > max_page_encoded or total > max_total_encoded:
+				return None
+			images.append(image)
+		return images
 	except Exception:
 		# A page pdfium cannot draw is not a failed reading: the provider gets
 		# the PDF and draws it itself.
@@ -59,14 +73,18 @@ def scanned_pages(content: bytes) -> list[bytes] | None:
 
 
 def has_text_layer(content: bytes) -> bool:
+	"""Whether the PDF carries text of its own. Stops reading once it knows."""
 	from pypdf import PdfReader
 
+	text = ""
 	try:
-		pages = PdfReader(BytesIO(content)).pages
-		text = "".join((page.extract_text() or "") for page in pages)
+		for page in PdfReader(BytesIO(content)).pages:
+			text += page.extract_text() or ""
+			if len(text.strip()) >= TEXT_LAYER_MIN_CHARS:
+				return True
 	except Exception:
 		return False
-	return len(text.strip()) >= TEXT_LAYER_MIN_CHARS
+	return False
 
 
 def page_scale(width: float, height: float) -> float:

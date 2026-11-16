@@ -24,8 +24,8 @@ from unittest.mock import patch
 import frappe
 from PIL import Image, ImageDraw
 
-from frappe_agents.documents import reader
-from frappe_agents.documents.pages import PAGE_LONG_EDGE, PAGE_VISUAL_TOKENS
+from frappe_agents.documents import pages, reader
+from frappe_agents.documents.pages import MAX_PAGE_IMAGES, PAGE_LONG_EDGE, PAGE_VISUAL_TOKENS
 from frappe_agents.extraction.pipeline import run_extraction
 from frappe_agents.runner.providers import call_model_extract
 from frappe_agents.tests.fixtures import (
@@ -42,12 +42,20 @@ PDF = "application/pdf"
 PATCH = 28
 
 
-def scanned_pdf(pages: int = 1, size: tuple[int, int] = (1240, 1753)) -> bytes:
-	"""A PDF whose pages are pictures of text: A4 at 150 dpi, no text layer."""
+def scanned_pdf(pages: int = 1, size: tuple[int, int] = (1240, 1753), noisy: bool = False) -> bytes:
+	"""A PDF whose pages are pictures of text: A4 at 150 dpi, no text layer.
+
+	Each page carries a blue block in its lower half, the way a stamp sits on a
+	delivery note, so a test can tell a page drawn in colour from one in grey.
+	A noisy page is a bad scan: small as JPEG inside the PDF, heavy as a PNG.
+	"""
+	width, height = size
 	images = []
 	for number in range(1, pages + 1):
-		image = Image.new("RGB", size, "white")
-		ImageDraw.Draw(image).text((100, 100), f"Pipe HDPE 180mm  Mtr  468.00  page {number}", fill="black")
+		image = Image.effect_noise(size, 60).convert("RGB") if noisy else Image.new("RGB", size, "white")
+		draw = ImageDraw.Draw(image)
+		draw.text((width // 12, height // 17), f"Pipe HDPE 180mm  Mtr  468.00  page {number}", fill="black")
+		draw.rectangle((width // 2, height * 3 // 4, width * 7 // 8, height * 7 // 8), fill=(20, 40, 200))
 		images.append(image)
 	buffer = BytesIO()
 	images[0].save(buffer, "PDF", resolution=150, save_all=True, append_images=images[1:])
@@ -152,9 +160,55 @@ class TestScannedPages(AnthropicScanCase):
 
 	def test_more_pages_than_one_request_may_carry_as_images_go_as_the_pdf(self):
 		"""Past 20 images Anthropic tightens the size of every image in the request."""
-		content = scanned_pdf(pages=21, size=(124, 175))
+		content = scanned_pdf(pages=MAX_PAGE_IMAGES + 1, size=(124, 175))
 
 		self.assert_sent_as_itself(self.sent(content), content)
+
+	def test_a_scan_of_exactly_twenty_pages_still_goes_as_images(self):
+		"""The edge: 20 images is still inside the plain limit."""
+		blocks = self.sent(scanned_pdf(pages=MAX_PAGE_IMAGES, size=(124, 175)))
+
+		self.assertEqual(self.kinds(blocks).count("image"), MAX_PAGE_IMAGES)
+		self.assertNotIn("document", self.kinds(blocks))
+
+	def test_pages_too_heavy_for_one_request_go_as_the_pdf_itself(self):
+		"""Each page fits on its own; all of them together do not."""
+		content = scanned_pdf(pages=2, noisy=True)
+		# Room for the PDF itself and for each page, not for both pages together.
+		limit = len(base64.b64encode(content)) + 1
+		with patch("frappe_agents.runner.providers.ANTHROPIC_MAX_REQUEST_ENCODED", limit):
+			blocks = self.sent(content)
+
+		self.assert_sent_as_itself(blocks, content)
+
+	def test_a_page_is_drawn_in_colour(self):
+		"""A blue stamp over black print is easier to read apart in colour."""
+		page = self.page_image(self.sent(scanned_pdf())[1])
+
+		self.assertEqual(page.mode, "RGB")
+		small = page.resize((62, 88))
+		self.assertTrue(any(blue - red > 100 for red, _green, blue in small.getdata()))
+
+	def test_drawing_stops_once_the_pages_are_over_the_request_limit(self):
+		"""A heavy scan that will go whole is not drawn to the end first."""
+		content = scanned_pdf(pages=3, noisy=True)
+		limit = len(base64.b64encode(content)) + 1
+		with (
+			patch("frappe_agents.runner.providers.ANTHROPIC_MAX_REQUEST_ENCODED", limit),
+			patch.object(pages, "_png", wraps=pages._png) as drawn,
+		):
+			blocks = self.sent(content)
+
+		self.assert_sent_as_itself(blocks, content)
+
+		self.assertEqual(drawn.call_count, 1)
+
+	def test_the_page_count_is_checked_before_any_text_is_read(self):
+		"""Too many pages is the cheap answer, so it is asked first."""
+		with patch.object(pages, "has_text_layer", wraps=pages.has_text_layer) as scanned:
+			self.sent(scanned_pdf(pages=MAX_PAGE_IMAGES + 1, size=(124, 175)))
+
+		scanned.assert_not_called()
 
 	def test_the_transcription_marks_an_unsure_digit_and_never_guesses(self):
 		"""A wrong quantity read with confidence is worse than one marked as doubtful."""

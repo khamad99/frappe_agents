@@ -2153,13 +2153,10 @@ def _anthropic_file_blocks(file_bytes: bytes, encoded: str, media_type: str, fil
 	if media_type != PDF_MEDIA_TYPE:
 		return [_image_block(media_type, encoded)]
 
-	pages = scanned_pages(file_bytes)
-	if pages:
-		images = [base64.b64encode(page).decode("ascii") for page in pages]
-		# Pages that would not fit the request go as the PDF, which already did.
-		fits = max(map(len, images)) <= ANTHROPIC_MAX_IMAGE_ENCODED
-		if fits and sum(map(len, images)) <= ANTHROPIC_MAX_REQUEST_ENCODED:
-			return _page_blocks(images)
+	# Pages that would not fit the request go as the PDF, which already did.
+	images = scanned_pages(file_bytes, ANTHROPIC_MAX_IMAGE_ENCODED, ANTHROPIC_MAX_REQUEST_ENCODED)
+	if images:
+		return _page_blocks(images)
 
 	block: dict[str, Any] = {
 		"type": "document",
