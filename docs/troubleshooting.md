@@ -86,7 +86,8 @@ job. Raise it only if the agent genuinely needs more turns.
 
 **"The answer was cut off before it started."** The model used its whole
 answer allowance on thinking and wrote no answer. An Anthropic or OpenAI
-Responses turn may write 16,000 tokens, thinking included. Ask again: the new
+Responses turn may write 16,000 tokens, thinking included. On an OpenAI
+Compatible provider the limit is the provider's own default. Ask again: the new
 turn gets the tool results the cut-off turn already read. If it happens again,
 split the request into smaller questions.
 

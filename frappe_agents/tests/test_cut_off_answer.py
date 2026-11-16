@@ -115,6 +115,11 @@ class AnthropicCase(AgentTestCase):
 			execute_run(run.name)
 		return run, post
 
+	def limit_steps(self, max_steps: int) -> None:
+		frappe.db.set_value("Agent", AGENT, "max_steps", max_steps, update_modified=False)
+		frappe.clear_document_cache("Agent", AGENT)
+		self.addCleanup(frappe.clear_document_cache, "Agent", AGENT)
+
 
 class TestAnthropicBudget(AnthropicCase):
 	def test_a_streamed_request_asks_for_the_chat_budget(self):
@@ -168,17 +173,37 @@ class TestCutOffAnswer(AnthropicCase):
 		self.assertEqual(run_value(run.name, "status"), "Completed")
 		self.assertEqual(run_value(run.name, "output_message"), "Three are open, and")
 
+	def test_a_reply_cut_off_with_only_whitespace_is_a_cut_off(self):
+		"""Blank lines are not an answer. The person would still see nothing."""
+		run, _post = self.execute(reply(thinking_block(), text_block("\n\n", 1), stop="max_tokens"))
+
+		self.assertEqual(run_value(run.name, "status"), "Failed")
+		self.assertEqual(run_value(run.name, "error"), CUT_OFF_MESSAGE)
+
 	def test_a_cut_off_on_the_last_allowed_step_still_says_it_was_cut_off(self):
 		"""Not "stopped after N steps": the step limit is not what ended it."""
-		frappe.db.set_value("Agent", AGENT, "max_steps", 2, update_modified=False)
-		frappe.clear_document_cache("Agent", AGENT)
-		self.addCleanup(frappe.clear_document_cache, "Agent", AGENT)
+		self.limit_steps(2)
 
 		run, post = self.execute(reply(tool_block(), stop="tool_use"), cut_off())
 
 		self.assertEqual(post.call_count, 2)
 		self.assertEqual(run_value(run.name, "status"), "Failed")
 		self.assertEqual(run_value(run.name, "error"), CUT_OFF_MESSAGE)
+
+	def test_a_length_stop_that_asked_for_a_tool_is_not_a_cut_off(self):
+		"""The turn did something: the tool runs and the loop goes on, as before.
+
+		With one step allowed the loop then stops at the step limit, and the run
+		says that, not that the answer was cut off.
+		"""
+		self.limit_steps(1)
+
+		run, post = self.execute(reply(tool_block(), stop="max_tokens"))
+
+		self.assertEqual(post.call_count, 1)
+		self.assertEqual(len(tool_calls_for(run.name)), 1)
+		self.assertEqual(run_value(run.name, "status"), "Failed")
+		self.assertEqual(run_value(run.name, "error"), "Stopped after 1 steps without a final answer.")
 
 	def test_asking_again_replays_the_tool_results_of_the_cut_off_turn(self):
 		"""A Failed run comes back with its work, so the retry does not pay twice."""
