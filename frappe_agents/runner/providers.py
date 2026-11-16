@@ -92,6 +92,8 @@ import frappe
 import requests
 from frappe.utils import cint
 
+from frappe_agents.documents.pages import scanned_pages
+
 PROVIDER_OPENAI = "OpenAI Compatible"
 PROVIDER_RESPONSES = "OpenAI Responses"
 PROVIDER_ANTHROPIC = "Anthropic"
@@ -2085,6 +2087,7 @@ def call_model_extract(
 	anthropic = provider.provider_type == PROVIDER_ANTHROPIC
 	if anthropic:
 		_check_anthropic_structured(profile)
+		blocks = _anthropic_file_blocks(file_bytes, encoded, media_type, filename)
 
 	annotations: list | None = None
 	attempts = 0
@@ -2096,9 +2099,7 @@ def call_model_extract(
 		attempts += 1
 		try:
 			if anthropic:
-				result = _extract_anthropic(
-					provider, profile, api_key, encoded, media_type, filename, schema, instructions, budget
-				)
+				result = _extract_anthropic(provider, profile, api_key, blocks, schema, instructions, budget)
 			else:
 				result = _extract_openai(
 					provider,
@@ -2142,38 +2143,63 @@ def call_model_extract(
 		}
 
 
+def _anthropic_file_blocks(file_bytes: bytes, encoded: str, media_type: str, filename: str) -> list[dict]:
+	"""The document as Anthropic content blocks: page images for a scan, else the file.
+
+	A PDF with a text layer goes whole, because its text travels beside the page
+	images Anthropic draws. A scan carries no text, so the model reads only those
+	images, and they are drawn too small for small print. See `documents.pages`.
+	"""
+	if media_type != PDF_MEDIA_TYPE:
+		return [_image_block(media_type, encoded)]
+
+	pages = scanned_pages(file_bytes)
+	if pages:
+		images = [base64.b64encode(page).decode("ascii") for page in pages]
+		# Pages that would not fit the request go as the PDF, which already did.
+		fits = max(map(len, images)) <= ANTHROPIC_MAX_IMAGE_ENCODED
+		if fits and sum(map(len, images)) <= ANTHROPIC_MAX_REQUEST_ENCODED:
+			return _page_blocks(images)
+
+	block: dict[str, Any] = {
+		"type": "document",
+		"source": {"type": "base64", "media_type": PDF_MEDIA_TYPE, "data": encoded},
+	}
+	if filename:
+		block["title"] = filename
+	return [block]
+
+
+def _page_blocks(images: list[str]) -> list[dict]:
+	"""One image per page, each named the way Anthropic advises for several images."""
+	blocks = []
+	for number, image in enumerate(images, start=1):
+		blocks.append({"type": "text", "text": f"Page {number}:"})
+		blocks.append(_image_block("image/png", image))
+	return blocks
+
+
+def _image_block(media_type: str, encoded: str) -> dict:
+	return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": encoded}}
+
+
 def _extract_anthropic(
 	provider: Any,
 	profile: Any,
 	api_key: str,
-	encoded: str,
-	media_type: str,
-	filename: str,
+	blocks: list[dict],
 	schema: dict,
 	instructions: str,
 	max_tokens: int,
 ) -> dict:
 	url = f"{(provider.base_url or ANTHROPIC_BASE_URL).rstrip('/')}/v1/messages"
 
-	if media_type == PDF_MEDIA_TYPE:
-		block: dict[str, Any] = {
-			"type": "document",
-			"source": {"type": "base64", "media_type": PDF_MEDIA_TYPE, "data": encoded},
-		}
-		if filename:
-			block["title"] = filename
-	else:
-		block = {
-			"type": "image",
-			"source": {"type": "base64", "media_type": media_type, "data": encoded},
-		}
-
 	payload: dict[str, Any] = {
 		"model": profile.model_id,
 		"max_tokens": max_tokens,
 		"system": EXTRACT_SYSTEM,
 		# Anthropic's own advice: the document goes before the text that asks about it.
-		"messages": [{"role": "user", "content": [block, {"type": "text", "text": instructions}]}],
+		"messages": [{"role": "user", "content": [*blocks, {"type": "text", "text": instructions}]}],
 		"output_config": {"format": {"type": "json_schema", "schema": schema}},
 	}
 	_assert_no_tools(payload)

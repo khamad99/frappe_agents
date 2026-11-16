@@ -62,7 +62,9 @@ How each one is read:
 - **A PDF with text in it** is read directly. Nothing is sent anywhere.
 - **A scan, a photo or a screenshot** has no text to read, so it is transcribed
   by the model your agent runs on. That needs a model profile marked as able to
-  read PDFs or images; if it is not, the agent says so and stops.
+  read PDFs or images; if it is not, the agent says so and stops. A character
+  the model cannot read for certain is marked `[?]`, for example `4[?]68`.
+  Check a marked number on the paper.
 - **A spreadsheet** comes back as plain rows, one sheet at a time. Cells show
   their **values, not their formulas** — the number you would see in the sheet.
   If a sheet is wide or long, only the first rows and columns are shown, and the

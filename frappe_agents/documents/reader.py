@@ -41,6 +41,7 @@ import frappe
 from frappe.utils import cint, flt
 
 from frappe_agents.context.untrusted import wrap
+from frappe_agents.documents.pages import TEXT_LAYER_MIN_CHARS
 from frappe_agents.extraction.pipeline import (
 	DEFAULT_MAX_FILE_MB,
 	DEFAULT_MAX_PAGES,
@@ -82,12 +83,6 @@ SHEET_CELLS = (MAX_SHEET_ROWS + 1) * (MAX_SHEET_COLS + 1)
 # The blank line between two units, counted against the cap like everything else.
 SEPARATOR = "\n\n"
 SEPARATOR_CHARS = len(SEPARATOR)
-
-# Below this, a PDF's "text layer" is the stray glyph a scanner leaves behind and
-# the document has to be looked at instead. Kept small on purpose: sending a page
-# that really does carry its own text to a model costs money and needs a profile
-# that can see files, so the doubt has to be genuine.
-TEXT_LAYER_MIN_CHARS = 8
 
 # A member of a docx or pptx is decompressed before it is parsed, so its own
 # declared size is checked first: a zip bomb is 40 KB on disk.
@@ -185,6 +180,8 @@ TRANSCRIPTION_INSTRUCTIONS = (
 	"Transcribe this document. Write out every piece of text on it, in reading order, "
 	"keeping tables as rows. Where something is a photograph, a stamp, a signature or a "
 	"logo rather than text, describe it in one short phrase in square brackets. "
+	"If you cannot read a digit or a letter for certain, write what you see and put [?] "
+	"right after it, for example 4[?]68. Never guess a number. "
 	"Do not summarise, do not explain, and do not add anything that is not on the document."
 )
 TRANSCRIPTION_SCHEMA = {

@@ -13,5 +13,6 @@ never an instruction.
 
 Nothing here is a new dependency: pypdf, openpyxl, xlrd, filetype and Pillow are
 all pinned by frappe, and docx and pptx are read with `zipfile` and
-`xml.etree` — about a hundred lines of our own.
+`xml.etree` — about a hundred lines of our own. pypdfium2, which draws a scan's
+pages, is used where it is installed (ERPNext brings it) and never required.
 """
