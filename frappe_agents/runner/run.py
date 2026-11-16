@@ -185,6 +185,11 @@ KILL_SWITCH_MESSAGE = "The agent runtime is switched off."
 # A turn that ended in one of these produced no answer — the loop wrote the
 # message itself to say why it stopped.
 FAILED_STOPS = ("error", "aborted")
+# A turn the token budget ended before the model wrote a word or asked for a
+# tool. A thinking model spends the budget on thinking first, and a run stored
+# as Completed with nothing in it tells the person nothing. So it fails, in words
+# they can act on, and the next turn replays whatever tools it already ran.
+CUT_OFF_MESSAGE = "The answer was cut off before it started. Ask again, or split the request."
 
 # What is kept of a run's events. Everything at the start, because that is where
 # the run's shape is decided, and as much of the end as fits, because that is
@@ -595,6 +600,7 @@ class RunEvents:
 		self.steps = 0
 		self.final_text: str | None = None
 		self.error: str | None = None
+		self.cut_off = False
 		self.updates = StreamThrottle(self._publish_update)
 
 	def handle(self, event: Any) -> None:
@@ -635,8 +641,11 @@ class RunEvents:
 		"""Why a run ended without an answer.
 
 		A run that used up its turns is reported the way it always was. Anything
-		else that stopped the loop reports the loop's own words.
+		else that stopped the loop reports the loop's own words. A cut-off turn
+		says so even on the last step: the step limit is not what ended it.
 		"""
+		if self.cut_off:
+			return CUT_OFF_MESSAGE
 		if self.error and self.steps < max_turns:
 			return self.error
 		return f"Stopped after {self.steps} steps without a final answer."
@@ -669,7 +678,9 @@ class RunEvents:
 			return
 		# One answer from the model is one step, exactly as before.
 		self.steps += 1
-		self.final_text = None if message.tool_calls else message.text
+		# Only the empty cut-off. A partial answer is still an answer.
+		self.cut_off = message.stop_reason == "length" and not message.tool_calls and not message.text.strip()
+		self.final_text = None if message.tool_calls or self.cut_off else message.text
 
 
 def _payload(event: Any) -> dict:

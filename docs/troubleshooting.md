@@ -84,6 +84,12 @@ consider a profile on a less contended model for high-volume agents.
 **The run stops at a step count.** That is **Max Steps** on the Agent doing its
 job. Raise it only if the agent genuinely needs more turns.
 
+**"The answer was cut off before it started."** The model used its whole
+answer allowance on thinking and wrote no answer. An Anthropic or OpenAI
+Responses turn may write 16,000 tokens, thinking included. Ask again: the new
+turn gets the tool results the cut-off turn already read. If it happens again,
+split the request into smaller questions.
+
 **Everything stops at the same time each day.** That is the **Daily Token
 Budget**, on the Agent or the fallback in Agent Settings.
 
