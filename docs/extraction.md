@@ -52,9 +52,19 @@ and says so. That is narrower than what an agent can *read* — a spreadsheet or
 Word file can be read into a conversation, but only a PDF or an image can be
 turned into a draft.
 
-The file goes to the model as the file. There is no rasterisation anywhere in
-the app — nothing in a frappe environment can turn a PDF page into an image — so
-the model profile must honestly declare **Supports PDF** or **Supports Images**.
+The file goes to the model as the file, with one exception. A scanned PDF — a
+PDF with no text in it — goes to an Anthropic model as page images, one per page,
+drawn at the largest size the model reads (about 200 dpi on an A4 page). Sent
+whole, Anthropic draws the pages smaller, and small print on a scan is misread.
+Drawing a page does not change it: nothing is cropped or cleaned, and the File
+keeps the PDF as it was uploaded. The pages are drawn with pypdfium2, which
+ERPNext installs. The PDF goes whole, the way it did before, in three cases:
+pypdfium2 is not installed, the scan has more than 20 pages, or the page images
+are too large to send. One page may be 10 MiB and all pages together 32 MiB,
+both counted in base64. A long scan of poor quality, about seven noisy A4 pages
+or more, can pass the second limit. A PDF with text in it always goes whole.
+
+The model profile must honestly declare **Supports PDF** or **Supports Images**.
 A profile claiming support it does not have fails here.
 
 For PDFs there is a **PDF Parser Engine** choice in Agent Settings. `native`

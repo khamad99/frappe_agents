@@ -105,6 +105,13 @@ jobs:
           bench --site test_site install-app frappe_agents
           bench --site test_site set-config allow_tests true
 
+      - name: Install the scan renderer
+        # pypdfium2 draws a scanned PDF's pages. ERPNext brings it on a real site;
+        # this bench is Frappe-only, and without it the rendering tests skip.
+        # Pinned to the oldest version on a supported site.
+        working-directory: /home/runner/frappe-bench
+        run: ./env/bin/pip install "pypdfium2==5.11.0"
+
       - name: Run tests
         working-directory: /home/runner/frappe-bench
         run: bench --site test_site run-tests --app frappe_agents
