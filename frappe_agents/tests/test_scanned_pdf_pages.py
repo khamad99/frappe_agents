@@ -18,6 +18,7 @@ Only the HTTP post is stubbed. What is asserted is the body that would be sent.
 import base64
 import math
 import sys
+import unittest
 from io import BytesIO
 from unittest.mock import patch
 
@@ -40,6 +41,12 @@ from frappe_agents.tests.test_document_reading import ReadingTestCase, text_pdf
 
 PDF = "application/pdf"
 PATCH = 28
+
+# pypdfium2 comes with ERPNext, not with Frappe, so a Frappe-only bench has none.
+# Without it a scan goes as the whole PDF; the tests of that fallback run anyway.
+NEEDS_RENDERER = unittest.skipUnless(
+	pages._renderer() is not None, "pypdfium2 is not installed, so a scan goes as the whole PDF"
+)
 
 
 def scanned_pdf(pages: int = 1, size: tuple[int, int] = (1240, 1753), noisy: bool = False) -> bytes:
@@ -113,6 +120,7 @@ class AnthropicScanCase(ReadingTestCase):
 		self.assertEqual(blocks[0]["source"]["data"], base64.b64encode(content).decode())
 
 
+@NEEDS_RENDERER
 class TestScannedPages(AnthropicScanCase):
 	def test_a_scan_goes_as_one_labelled_image_per_page(self):
 		"""Scenario S-7: no text layer, so no document block. Pages in order."""
@@ -136,20 +144,6 @@ class TestScannedPages(AnthropicScanCase):
 		# The page keeps its shape: A4 is 1 : 1.414.
 		self.assertAlmostEqual(height / width, 1753 / 1240, places=2)
 
-	def test_a_pdf_with_a_text_layer_still_goes_as_itself(self):
-		"""Its own text travels beside Anthropic's page images. Nothing to gain here."""
-		content = text_pdf(["Delivery order 26312419", "Quantity 468.00 Mtr"])
-
-		self.assert_sent_as_itself(self.sent(content), content)
-
-	def test_without_the_renderer_a_scan_goes_as_itself(self):
-		"""pypdfium2 comes with ERPNext, not with Frappe. Without it, nothing breaks."""
-		content = scanned_pdf()
-		with patch.dict(sys.modules, {"pypdfium2": None}):
-			blocks = self.sent(content)
-
-		self.assert_sent_as_itself(blocks, content)
-
 	def test_pages_too_heavy_for_the_wire_go_as_the_pdf_itself(self):
 		"""Over the per-image limit, the PDF that already passed its own check is sent."""
 		content = scanned_pdf()
@@ -157,12 +151,6 @@ class TestScannedPages(AnthropicScanCase):
 			blocks = self.sent(content)
 
 		self.assert_sent_as_itself(blocks, content)
-
-	def test_more_pages_than_one_request_may_carry_as_images_go_as_the_pdf(self):
-		"""Past 20 images Anthropic tightens the size of every image in the request."""
-		content = scanned_pdf(pages=MAX_PAGE_IMAGES + 1, size=(124, 175))
-
-		self.assert_sent_as_itself(self.sent(content), content)
 
 	def test_a_scan_of_exactly_twenty_pages_still_goes_as_images(self):
 		"""The edge: 20 images is still inside the plain limit."""
@@ -210,6 +198,30 @@ class TestScannedPages(AnthropicScanCase):
 
 		scanned.assert_not_called()
 
+
+class TestScanFallbacks(AnthropicScanCase):
+	"""What holds on every site, with or without the renderer."""
+
+	def test_a_pdf_with_a_text_layer_still_goes_as_itself(self):
+		"""Its own text travels beside Anthropic's page images. Nothing to gain here."""
+		content = text_pdf(["Delivery order 26312419", "Quantity 468.00 Mtr"])
+
+		self.assert_sent_as_itself(self.sent(content), content)
+
+	def test_without_the_renderer_a_scan_goes_as_itself(self):
+		"""pypdfium2 comes with ERPNext, not with Frappe. Without it, nothing breaks."""
+		content = scanned_pdf()
+		with patch.dict(sys.modules, {"pypdfium2": None}):
+			blocks = self.sent(content)
+
+		self.assert_sent_as_itself(blocks, content)
+
+	def test_more_pages_than_one_request_may_carry_as_images_go_as_the_pdf(self):
+		"""Past 20 images Anthropic tightens the size of every image in the request."""
+		content = scanned_pdf(pages=MAX_PAGE_IMAGES + 1, size=(124, 175))
+
+		self.assert_sent_as_itself(self.sent(content), content)
+
 	def test_the_transcription_marks_an_unsure_digit_and_never_guesses(self):
 		"""A wrong quantity read with confidence is worse than one marked as doubtful."""
 		instructions = reader.TRANSCRIPTION_INSTRUCTIONS
@@ -219,6 +231,7 @@ class TestScannedPages(AnthropicScanCase):
 		self.assertEqual(self.sent(scanned_pdf())[-1]["text"], instructions)
 
 
+@NEEDS_RENDERER
 class TestScannedPagesOnEveryPath(AnthropicScanCase):
 	"""The tool and the extraction job reach the model through the same call."""
 
