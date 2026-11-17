@@ -97,7 +97,12 @@ PROVIDER_RESPONSES = "OpenAI Responses"
 PROVIDER_ANTHROPIC = "Anthropic"
 
 REQUEST_TIMEOUT = 120
-DEFAULT_MAX_TOKENS = 4096
+# What one Anthropic turn may write, thinking included. The API requires the
+# field, and a thinking model spends it on thinking before the answer: at 4096 a
+# hard question used it all up and the turn ended with no text at all. The same
+# budget as the Responses wire. Every model this app knows allows more (Claude
+# Haiku 4.5, the smallest, allows 64K), so no model refuses it.
+ANTHROPIC_MAX_TOKENS = 16_000
 
 # The streaming budget, in place of the flat total. Connecting is either quick or
 # broken; after that only silence is a failure, and 60s of it is generous even
@@ -155,8 +160,8 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 RESPONSES_STORE = False
 RESPONSES_INCLUDE = ("reasoning.encrypted_content",)
 # Reasoning tokens are billed against this budget before a word of the answer is
-# written, so the 4096 the other wires use would let a thinking model spend its
-# whole allowance thinking and return an empty, truncated turn.
+# written, so a 4096 budget would let a thinking model spend its whole allowance
+# thinking and return an empty, truncated turn.
 RESPONSES_MAX_OUTPUT_TOKENS = 16_000
 # Only function tools may be sent. A hosted tool (web_search, code_interpreter,
 # file_search, computer_use, a remote MCP server) executes inside OpenAI, which
@@ -435,7 +440,7 @@ def _call_anthropic(
 	system, converted = _anthropic_messages(messages)
 	payload: dict[str, Any] = {
 		"model": profile.model_id,
-		"max_tokens": DEFAULT_MAX_TOKENS,
+		"max_tokens": ANTHROPIC_MAX_TOKENS,
 		"messages": converted,
 	}
 	if system:
@@ -1104,7 +1109,7 @@ def _stream_anthropic(
 	system, converted = _anthropic_messages(messages)
 	payload: dict[str, Any] = {
 		"model": profile.model_id,
-		"max_tokens": DEFAULT_MAX_TOKENS,
+		"max_tokens": ANTHROPIC_MAX_TOKENS,
 		"messages": converted,
 		"stream": True,
 	}
