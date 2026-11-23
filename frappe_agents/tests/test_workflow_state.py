@@ -12,9 +12,12 @@ rows and in links rows. A doctype with no active Workflow carries none, even
 when the field a Workflow once added is still on it.
 """
 
+from unittest.mock import patch
+
 import frappe
 from frappe.model.workflow import apply_workflow
 
+from frappe_agents.context import manifest
 from frappe_agents.tests.fixtures import (
 	DRAFT_USER,
 	ORDER_DT,
@@ -69,6 +72,18 @@ class TestWorkflowStateInTheReadTools(AgentTestCase):
 		self.assertEqual(drafted["status_word"], "DRAFT")
 		self.assertEqual(approved[STATE], WORKFLOW_APPROVED_STATE)
 		self.assertEqual(approved["status_word"], "SUBMITTED")
+
+	def test_the_state_comes_on_top_of_a_full_set_of_core_fields(self):
+		"""No core field drops out for it: a full context keeps every field and adds the state."""
+		order = make_order_draft()
+		core = list(self.context(order.name))
+
+		# The cap at exactly the order's own core fields, so the context is full.
+		full = len(manifest._core_docfields(frappe.get_meta(ORDER_DT)))
+		with patch.object(manifest, "MAX_CORE_FIELDS", full), active_workflow(ORDER_DT):
+			doc = self.context(make_order_draft().name)
+
+		self.assertEqual(sorted(doc), sorted([*core, STATE]))
 
 	def test_search_rows_give_the_workflow_state(self):
 		with active_workflow(ORDER_DT):

@@ -114,8 +114,6 @@ def _core_docfields(meta: Any) -> list:
 
 	if meta.title_field:
 		take(meta.get_field(meta.title_field))
-	# On a workflow doctype the state names the stage; status_word only says DRAFT.
-	take(workflow_state_docfield(meta))
 
 	for df in meta.fields:
 		if len(chosen) >= MAX_CORE_FIELDS:
@@ -123,7 +121,10 @@ def _core_docfields(meta: Any) -> list:
 		if cint(df.in_list_view) or cint(df.bold) or cint(df.in_standard_filter) or cint(df.reqd):
 			take(df)
 
-	return chosen[:MAX_CORE_FIELDS]
+	# On a workflow doctype the state names the stage. status_word says only DRAFT,
+	# SUBMITTED or CANCELLED. It comes on top of the cap, so no core field drops out.
+	take(workflow_state_docfield(meta))
+	return chosen
 
 
 def _amended_by(doctype: str, name: str) -> str | None:
