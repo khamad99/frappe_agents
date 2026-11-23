@@ -70,8 +70,12 @@ def search_documents(payload: dict) -> dict:
 	meta = frappe.get_meta(doctype)
 	allowed_levels = meta.get_permlevel_access("read")
 
-	requested = _with_workflow_state(meta, payload.get("fields"))
-	fields, restricted = _resolve_fields(meta, requested, allowed_levels)
+	# On a workflow doctype the state is always asked for. It goes through the
+	# same permlevel check as every other field.
+	state_df = workflow_state_docfield(meta)
+	fields, restricted = _resolve_fields(
+		meta, payload.get("fields"), allowed_levels, also=state_df.fieldname if state_df else None
+	)
 	filters = _resolve_filters(meta, payload.get("filters"), allowed_levels)
 	limit = _resolve_limit(payload.get("limit"), row_cap(doctype, MAX_LIMIT))
 	order_by = _resolve_order_by(meta, payload.get("order_by"), allowed_levels)
@@ -293,13 +297,17 @@ def _require_str(payload: dict, key: str) -> str:
 	return value.strip()
 
 
-def _resolve_fields(meta: Any, requested: Any, allowed_levels: list) -> tuple[list[str], list[str]]:
+def _resolve_fields(
+	meta: Any, requested: Any, allowed_levels: list, also: str | None = None
+) -> tuple[list[str], list[str]]:
 	if requested is None:
 		requested = _default_fields(meta)
 	if isinstance(requested, str):
 		requested = [requested]
 	if not isinstance(requested, list):
 		raise ValueError("fields must be a list of fieldnames.")
+	if also:
+		requested = [*requested, also]
 
 	fields: list[str] = []
 	restricted: list[str] = []
@@ -326,23 +334,6 @@ def _resolve_fields(meta: Any, requested: Any, allowed_levels: list) -> tuple[li
 	if "name" not in fields:
 		fields.insert(0, "name")
 	return fields, restricted
-
-
-def _with_workflow_state(meta: Any, requested: Any) -> Any:
-	"""The fields asked for, plus the workflow state on a workflow doctype.
-
-	Added before the fields are resolved, so its permlevel is checked like any other.
-	"""
-	df = workflow_state_docfield(meta)
-	if not df:
-		return requested
-	if requested is None:
-		requested = _default_fields(meta)
-	if isinstance(requested, str):
-		requested = [requested]
-	if isinstance(requested, list) and df.fieldname not in requested:
-		requested = [*requested, df.fieldname]
-	return requested
 
 
 def _default_fields(meta: Any) -> list[str]:
