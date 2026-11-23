@@ -39,6 +39,7 @@ from frappe_agents.context.slices import (
 	require_read,
 	sample_linked_rows,
 	status_word,
+	workflow_state_docfield,
 )
 from frappe_agents.tools.base import has_grant
 
@@ -113,6 +114,8 @@ def _core_docfields(meta: Any) -> list:
 
 	if meta.title_field:
 		take(meta.get_field(meta.title_field))
+	# On a workflow doctype the state names the stage; status_word only says DRAFT.
+	take(workflow_state_docfield(meta))
 
 	for df in meta.fields:
 		if len(chosen) >= MAX_CORE_FIELDS:

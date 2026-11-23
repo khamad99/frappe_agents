@@ -29,7 +29,12 @@ from frappe_agents.access.grants import (
 	compiled_grants,
 	current_agent,
 )
-from frappe_agents.context.slices import has_row_permission_hook, may_read, status_word
+from frappe_agents.context.slices import (
+	has_row_permission_hook,
+	may_read,
+	status_word,
+	workflow_state_docfield,
+)
 from frappe_agents.documents import reader
 from frappe_agents.tools.base import (
 	CAPABILITY_READ,
@@ -65,7 +70,8 @@ def search_documents(payload: dict) -> dict:
 	meta = frappe.get_meta(doctype)
 	allowed_levels = meta.get_permlevel_access("read")
 
-	fields, restricted = _resolve_fields(meta, payload.get("fields"), allowed_levels)
+	requested = _with_workflow_state(meta, payload.get("fields"))
+	fields, restricted = _resolve_fields(meta, requested, allowed_levels)
 	filters = _resolve_filters(meta, payload.get("filters"), allowed_levels)
 	limit = _resolve_limit(payload.get("limit"), row_cap(doctype, MAX_LIMIT))
 	order_by = _resolve_order_by(meta, payload.get("order_by"), allowed_levels)
@@ -320,6 +326,23 @@ def _resolve_fields(meta: Any, requested: Any, allowed_levels: list) -> tuple[li
 	if "name" not in fields:
 		fields.insert(0, "name")
 	return fields, restricted
+
+
+def _with_workflow_state(meta: Any, requested: Any) -> Any:
+	"""The fields asked for, plus the workflow state on a workflow doctype.
+
+	Added before the fields are resolved, so its permlevel is checked like any other.
+	"""
+	df = workflow_state_docfield(meta)
+	if not df:
+		return requested
+	if requested is None:
+		requested = _default_fields(meta)
+	if isinstance(requested, str):
+		requested = [requested]
+	if isinstance(requested, list) and df.fieldname not in requested:
+		requested = [*requested, df.fieldname]
+	return requested
 
 
 def _default_fields(meta: Any) -> list[str]:

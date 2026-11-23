@@ -36,6 +36,7 @@ from typing import Any
 
 import frappe
 from frappe.model import no_value_fields, table_fields
+from frappe.model.workflow import get_workflow_name, get_workflow_state_field
 from frappe.utils import cint
 
 from frappe_agents.access.grants import VERB_READ
@@ -117,6 +118,20 @@ def require_read(doctype: str, name: str) -> None:
 def status_word(docstatus: Any) -> str:
 	"""DRAFT, SUBMITTED or CANCELLED — the model never sees the integer."""
 	return DOCSTATUS_WORDS.get(cint(docstatus), "DRAFT")
+
+
+def workflow_state_docfield(meta: Any) -> Any:
+	"""The field holding the workflow state, when an active Workflow governs the doctype.
+
+	On such a doctype `status_word` is not the stage people name: a submitted
+	document may be Approved or Closed. The field a Workflow adds stays on the
+	doctype after the Workflow goes, so the active Workflow decides, not the field.
+	`get_workflow_name` returns an empty string on a cached miss, so truthiness.
+	"""
+	workflow = get_workflow_name(meta.name)
+	if not workflow:
+		return None
+	return meta.get_field(get_workflow_state_field(workflow))
 
 
 def _slice_fields(doctype: str, name: str, params: dict) -> dict:
@@ -657,6 +672,9 @@ def _document_summary(doctype: str, name: Any) -> dict | None:
 	title_df = _title_docfield(doctype)
 	if title_df and title_df.fieldname not in fields:
 		fields.append(title_df.fieldname)
+	state_df = _state_docfield(doctype)
+	if state_df and state_df.fieldname not in fields:
+		fields.append(state_df.fieldname)
 
 	try:
 		row = frappe.db.get_value(doctype, name, fields, as_dict=True)
@@ -677,6 +695,8 @@ def _document_summary(doctype: str, name: Any) -> dict | None:
 		if is_untrusted_fieldtype(title_df.fieldtype):
 			title = wrap(title, f"{doctype} {name} {title_df.fieldname}")
 		summary["title"] = title
+	if state_df:
+		summary["workflow_state"] = row.get(state_df.fieldname)
 	return summary
 
 
@@ -688,7 +708,18 @@ def _title_docfield(doctype: str) -> Any:
 	title_field = meta.title_field
 	if not title_field or title_field == "name":
 		return None
-	df = meta.get_field(title_field)
+	return _readable_docfield(meta, meta.get_field(title_field))
+
+
+def _state_docfield(doctype: str) -> Any:
+	try:
+		meta = frappe.get_meta(doctype)
+	except Exception:
+		return None
+	return _readable_docfield(meta, workflow_state_docfield(meta))
+
+
+def _readable_docfield(meta: Any, df: Any) -> Any:
 	if not df or cint(df.permlevel) not in meta.get_permlevel_access("read"):
 		return None
 	return df
