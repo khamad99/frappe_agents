@@ -41,7 +41,7 @@ import frappe
 from frappe.utils import cint, flt
 
 from frappe_agents.context.untrusted import wrap
-from frappe_agents.documents.pages import TEXT_LAYER_MIN_CHARS
+from frappe_agents.documents.pages import has_text
 from frappe_agents.extraction.pipeline import (
 	DEFAULT_MAX_FILE_MB,
 	DEFAULT_MAX_PAGES,
@@ -529,16 +529,21 @@ def _read_pdf(file_doc: Any, content: bytes, settings: Any, wanted: list[int] | 
 	if total > max_pages:
 		raise ValueError(f"This PDF has {total} pages and reading is limited to {max_pages}.")
 
+	# The pages' own text, kept apart from the answer: the answer puts a heading
+	# above each page, and a heading is not a text layer.
+	texts: list[str] = []
+
 	def page(number: int) -> tuple[str, str]:
 		try:
 			text = reader.pages[number - 1].extract_text() or ""
 		except Exception:
 			# One unreadable page is a gap in the reading, not a failed read.
 			text = ""
+		texts.append(text.strip())
 		return f"{UNIT_PAGE} {number}", text.strip()
 
 	read = _assemble((total, page), wanted, UNIT_PAGE, LANE_TEXT_LAYER)
-	if len(read["text"].strip()) >= TEXT_LAYER_MIN_CHARS:
+	if has_text(texts):
 		return read
 
 	# No text layer worth the name: a scan, or pages that are pictures of text.

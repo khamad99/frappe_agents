@@ -304,6 +304,18 @@ class TestReadingPdfText(ReadingTestCase):
 
 		self.assertTrue(payload["ok"], payload["error"])
 
+	def test_a_text_pdf_of_several_pages_stays_on_the_text_layer(self):
+		"""The pages' text is counted together. No page needs much of it on its own."""
+		file = self.attach("short.pdf", text_pdf(["468 Mtr", "702 Mtr", "612 Mtr"]))
+
+		with patch("frappe_agents.documents.reader.call_model_extract") as call:
+			payload, _ = self.read_file(file)
+
+		self.assertTrue(payload["ok"], payload["error"])
+		self.assertEqual(payload["result"]["lane"], reader.LANE_TEXT_LAYER)
+		self.assertIn("702 Mtr", self.body(payload["result"]))
+		call.assert_not_called()
+
 	def test_a_password_protected_pdf_says_so(self):
 		payload, _ = self.read("locked.pdf", encrypted_pdf())
 
@@ -332,11 +344,11 @@ class TestReadingBySight(ReadingTestCase):
 			"attempts": 1,
 		}
 
-	def look(self, reply: dict | None = None, profile: str = EXTRACT_PROFILE):
+	def look(self, reply: dict | None = None, profile: str = EXTRACT_PROFILE, **args):
 		run = make_run(effective_user=DRAFT_USER, model_profile=profile)
 		with patch("frappe_agents.documents.reader.call_model_extract") as call:
 			call.return_value = reply if reply is not None else self.transcribed()
-			payload, run = self.read_file(self.scan, run=run)
+			payload, run = self.read_file(self.scan, run=run, **args)
 		return payload, run, call
 
 	def test_a_scan_is_transcribed_and_the_transcription_comes_back_wrapped(self):
@@ -348,6 +360,25 @@ class TestReadingBySight(ReadingTestCase):
 		self.assertIn("no text layer", result["note"])
 		self.assertIn("EMIRATES ID", self.body(result))
 		self.assertIn(reader.LANE_VISION, tool_calls_for(run.name)[0].result_summary)
+
+	def test_a_scan_of_several_pages_is_looked_at_not_read_as_text(self):
+		"""Each page of the answer gets a heading, and a heading is not text on the page."""
+		self.scan = self.attach("scan.pdf", make_pdf(f"scan {frappe.generate_hash(length=8)}", pages=3))
+
+		payload, _, call = self.look()
+
+		self.assertTrue(payload["ok"], payload["error"])
+		self.assertEqual(payload["result"]["lane"], reader.LANE_VISION)
+		self.assertEqual(call.call_count, 1)
+
+	def test_one_page_of_a_scan_asked_by_number_is_looked_at(self):
+		self.scan = self.attach("scan.pdf", make_pdf(f"scan {frappe.generate_hash(length=8)}", pages=3))
+
+		payload, _, call = self.look(pages="1")
+
+		self.assertTrue(payload["ok"], payload["error"])
+		self.assertEqual(payload["result"]["lane"], reader.LANE_VISION)
+		self.assertEqual(call.call_count, 1)
 
 	def test_the_sub_call_is_the_extraction_call_path_on_the_run_s_model(self):
 		"""Fixed instructions, the run's profile, and a schema with one string in it."""

@@ -39,6 +39,7 @@ from frappe_agents.context.slices import (
 	require_read,
 	sample_linked_rows,
 	status_word,
+	workflow_state_docfield,
 )
 from frappe_agents.tools.base import has_grant
 
@@ -120,7 +121,10 @@ def _core_docfields(meta: Any) -> list:
 		if cint(df.in_list_view) or cint(df.bold) or cint(df.in_standard_filter) or cint(df.reqd):
 			take(df)
 
-	return chosen[:MAX_CORE_FIELDS]
+	# On a workflow doctype the state names the stage. status_word says only DRAFT,
+	# SUBMITTED or CANCELLED. It comes on top of the cap, so no core field drops out.
+	take(workflow_state_docfield(meta))
+	return chosen
 
 
 def _amended_by(doctype: str, name: str) -> str | None:

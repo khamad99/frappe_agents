@@ -16,14 +16,15 @@ it is on most sites; where it is missing, the PDF goes whole, as it always did.
 
 import base64
 import math
+from collections.abc import Iterable
 from io import BytesIO
 
 # Below this, a PDF's "text layer" is the stray glyph a scanner leaves behind and
 # the document has to be looked at instead. Kept small on purpose: sending a page
 # that really does carry its own text to a model costs money and needs a profile
-# that can see files, so the doubt has to be genuine. The reader asks the same
-# question with this number, so pages are drawn for exactly the PDFs it reads by
-# sight.
+# that can see files, so the doubt has to be genuine. `has_text` is the one rule
+# that uses it. The reader and the provider both ask it, so pages are drawn for
+# exactly the PDFs the reader reads by sight.
 TEXT_LAYER_MIN_CHARS = 8
 
 # Anthropic's high-resolution limit (Claude 4.7 and later): 2,576 px on the long
@@ -76,14 +77,24 @@ def has_text_layer(content: bytes) -> bool:
 	"""Whether the PDF carries text of its own. Stops reading once it knows."""
 	from pypdf import PdfReader
 
-	text = ""
 	try:
-		for page in PdfReader(BytesIO(content)).pages:
-			text += page.extract_text() or ""
-			if len(text.strip()) >= TEXT_LAYER_MIN_CHARS:
-				return True
+		return has_text(page.extract_text() or "" for page in PdfReader(BytesIO(content)).pages)
 	except Exception:
 		return False
+
+
+def has_text(texts: Iterable[str]) -> bool:
+	"""Whether these page texts add up to a text layer. Stops at the threshold.
+
+	Only the pages' own text counts. A heading the reader puts above each page is
+	not text on the page, and counting it made every scan of two pages or more
+	look like text.
+	"""
+	found = 0
+	for text in texts:
+		found += len(text.strip())
+		if found >= TEXT_LAYER_MIN_CHARS:
+			return True
 	return False
 
 

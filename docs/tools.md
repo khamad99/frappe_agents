@@ -50,6 +50,10 @@ Every refusal is audited.
 The last three exist for the **Agents Builder** and are not offered to an
 ordinary agent.
 
+On a doctype with an active Workflow, `search_documents`, `get_document_context`
+and the fields and links slices also give each document's `workflow_state`.
+`status_word` stays DRAFT, SUBMITTED or CANCELLED.
+
 `get_document_context` before `get_document_slice` is the deliberate shape: the
 model is told what exists as counts, then asks for one slice, instead of being
 handed a document dump it did not need.

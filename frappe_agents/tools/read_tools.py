@@ -29,7 +29,12 @@ from frappe_agents.access.grants import (
 	compiled_grants,
 	current_agent,
 )
-from frappe_agents.context.slices import has_row_permission_hook, may_read, status_word
+from frappe_agents.context.slices import (
+	has_row_permission_hook,
+	may_read,
+	status_word,
+	workflow_state_docfield,
+)
 from frappe_agents.documents import reader
 from frappe_agents.tools.base import (
 	CAPABILITY_READ,
@@ -65,7 +70,12 @@ def search_documents(payload: dict) -> dict:
 	meta = frappe.get_meta(doctype)
 	allowed_levels = meta.get_permlevel_access("read")
 
-	fields, restricted = _resolve_fields(meta, payload.get("fields"), allowed_levels)
+	# On a workflow doctype the state is always asked for. It goes through the
+	# same permlevel check as every other field.
+	state_df = workflow_state_docfield(meta)
+	fields, restricted = _resolve_fields(
+		meta, payload.get("fields"), allowed_levels, also=state_df.fieldname if state_df else None
+	)
 	filters = _resolve_filters(meta, payload.get("filters"), allowed_levels)
 	limit = _resolve_limit(payload.get("limit"), row_cap(doctype, MAX_LIMIT))
 	order_by = _resolve_order_by(meta, payload.get("order_by"), allowed_levels)
@@ -287,13 +297,17 @@ def _require_str(payload: dict, key: str) -> str:
 	return value.strip()
 
 
-def _resolve_fields(meta: Any, requested: Any, allowed_levels: list) -> tuple[list[str], list[str]]:
+def _resolve_fields(
+	meta: Any, requested: Any, allowed_levels: list, also: str | None = None
+) -> tuple[list[str], list[str]]:
 	if requested is None:
 		requested = _default_fields(meta)
 	if isinstance(requested, str):
 		requested = [requested]
 	if not isinstance(requested, list):
 		raise ValueError("fields must be a list of fieldnames.")
+	if also:
+		requested = [*requested, also]
 
 	fields: list[str] = []
 	restricted: list[str] = []
