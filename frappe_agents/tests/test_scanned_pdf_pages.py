@@ -222,6 +222,24 @@ class TestScanFallbacks(AnthropicScanCase):
 
 		self.assert_sent_as_itself(self.sent(content), content)
 
+	def test_the_reader_and_the_provider_decide_alike(self):
+		"""The reader looks at exactly the PDFs the provider would draw as pages."""
+		files = {
+			"a scan of three pages": scanned_pdf(pages=3, size=(124, 175)),
+			"a scan of one page": scanned_pdf(size=(124, 175)),
+			"a text PDF of three pages": text_pdf(["468 Mtr", "702 Mtr", "612 Mtr"]),
+		}
+		for label, content in files.items():
+			with self.subTest(label):
+				file = self.attach("delivery-note.pdf", content)
+				run = make_run(effective_user=DRAFT_USER, model_profile=EXTRACT_PROFILE)
+				with patch("frappe_agents.runner.providers._post", return_value=answered()):
+					payload, _run = self.read_file(file, run=run)
+
+				self.assertTrue(payload["ok"], payload["error"])
+				on_text = payload["result"]["lane"] == reader.LANE_TEXT_LAYER
+				self.assertEqual(pages.has_text_layer(content), on_text)
+
 	def test_the_transcription_marks_an_unsure_digit_and_never_guesses(self):
 		"""A wrong quantity read with confidence is worse than one marked as doubtful."""
 		instructions = reader.TRANSCRIPTION_INSTRUCTIONS
@@ -246,6 +264,18 @@ class TestScannedPagesOnEveryPath(AnthropicScanCase):
 		self.assertIn("468.00", self.body(payload["result"]))
 		blocks = post.call_args.args[2]["messages"][0]["content"]
 		self.assertEqual(self.kinds(blocks), ["text", "image", "text"])
+
+	def test_a_scan_of_three_pages_goes_to_the_model_as_page_images(self):
+		file = self.attach("delivery-note.pdf", scanned_pdf(pages=3))
+		run = make_run(effective_user=DRAFT_USER, model_profile=EXTRACT_PROFILE)
+
+		with patch("frappe_agents.runner.providers._post", return_value=answered()) as post:
+			payload, _run = self.read_file(file, run=run)
+
+		self.assertTrue(payload["ok"], payload["error"])
+		self.assertEqual(payload["result"]["lane"], reader.LANE_VISION)
+		blocks = post.call_args.args[2]["messages"][0]["content"]
+		self.assertEqual(self.kinds(blocks), ["text", "image"] * 3 + ["text"])
 
 	def test_an_extraction_of_a_scan_sends_page_images_too(self):
 		file = make_pdf_attachment(content=scanned_pdf())
